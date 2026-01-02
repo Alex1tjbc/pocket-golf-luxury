@@ -1,14 +1,15 @@
 const config = {
     type: Phaser.AUTO,
-    width: window.innerWidth > 600 ? 400 : window.innerWidth, // Ancho móvil o ventana
-    height: window.innerHeight > 900 ? 800 : window.innerHeight, // Alto móvil
+    width: window.innerWidth,
+    height: window.innerHeight,
     parent: 'game-container',
-    backgroundColor: '#2d2d2d',
+    backgroundColor: '#000000', // Fondo negro para cargar
     physics: {
-        default: 'matter', // Física avanzada para realismo (no arcade)
+        default: 'matter',
         matter: {
-            gravity: { y: 0 }, // Vista superior, no hay gravedad hacia abajo
-            debug: false
+            gravity: { y: 0 },
+            frictionAir: 0.02,
+            bounce: 0.8
         }
     },
     scene: {
@@ -21,55 +22,77 @@ const config = {
 const game = new Phaser.Game(config);
 
 let ball;
-let graphics;
 let arrow;
 let isAiming = false;
 let power = 0;
+let textScore;
+let particles;
 
 function preload() {
-    // No cargamos imágenes externas para que funcione YA.
-    // Generaremos texturas "de lujo" en memoria.
+    // Generaremos todo por código para máxima calidad sin descargar imágenes
 }
 
 function create() {
-    // 1. GENERAR TEXTURAS 3D (Para que no sea "plano")
-    crearGraficosPremium(this);
+    // 1. CREAR ARTE DE LUJO (Procedural)
+    crearArteDeLujo(this);
 
-    // 2. CREAR EL ESCENARIO (Hoyo 1)
-    // El suelo: Césped sintético oscuro
-    const ground = this.add.tileSprite(config.width/2, config.height/2, config.width, config.height, 'grassTexture');
+    // 2. AMBIENTE (Fondo con viñeta para dar profundidad)
+    const bg = this.add.tileSprite(0, 0, config.width, config.height, 'feltTexture').setOrigin(0);
+    const vignette = this.add.image(config.width/2, config.height/2, 'vignette').setDisplaySize(config.width, config.height);
+    vignette.setAlpha(0.6); // Oscurecer esquinas
+
+    // 3. LÍMITES (Paredes invisibles pero con rebote)
+    this.matter.world.setBounds(0, 0, config.width, config.height, 32, true, true, true, true);
+
+    // 4. EL HOYO (Con profundidad)
+    const holeX = config.width / 2;
+    const holeY = config.height * 0.2; // Al 20% de arriba
     
-    // Límites (Paredes de madera)
-    const wallOptions = { isStatic: true, restitution: 0.6, friction: 0.1 };
-    this.matter.add.rectangle(config.width/2, 0, config.width, 50, wallOptions); // Norte
-    this.matter.add.rectangle(config.width/2, config.height, config.width, 50, wallOptions); // Sur
-    this.matter.add.rectangle(0, config.height/2, 50, config.height, wallOptions); // Oeste
-    this.matter.add.rectangle(config.width, config.height/2, 50, config.height, wallOptions); // Este
-
-    // El Hoyo (Con efecto de profundidad)
-    const hole = this.add.sprite(config.width/2, 150, 'holeTexture');
-    // Sensor del hoyo (física invisible)
-    const holeSensor = this.matter.add.circle(config.width/2, 150, 15, {
-        isSensor: true, // La bola pasa por encima, no choca
+    // Sombra del hoyo
+    this.add.image(holeX, holeY, 'holeTexture').setAlpha(0.8);
+    
+    // Sensor físico del hoyo
+    const holeSensor = this.matter.add.circle(holeX, holeY, 20, {
+        isSensor: true,
         label: 'hole'
     });
 
-    // 3. LA BOLA (El protagonista)
-    ball = this.matter.add.image(config.width/2, config.height - 150, 'ballTexture', null, {
+    // 5. LA BOLA (Esfera 3D)
+    const startY = config.height * 0.8;
+    ball = this.matter.add.image(config.width/2, startY, 'ballTexture', null, {
         shape: 'circle',
-        restitution: 0.8, // Rebote realista
-        friction: 0.05,   // Rueda mucho (césped fino)
-        frictionAir: 0.02, // Resistencia del aire
-        density: 0.04
+        restitution: 0.7,
+        friction: 0.06,
+        density: 0.05
     });
 
-    // 4. CONTROLES (Arrastrar para tirar)
+    // Emisor de partículas (polvo al rodar)
+    particles = this.add.particles(0, 0, 'particle', {
+        speed: 20,
+        scale: { start: 0.5, end: 0 },
+        alpha: { start: 0.5, end: 0 },
+        lifespan: 400,
+        blendMode: 'ADD',
+        on: false 
+    });
+    particles.startFollow(ball);
+
+    // 6. FLECHA DE TIRO (Elegante)
+    arrow = this.add.sprite(0, 0, 'arrowTexture');
+    arrow.setOrigin(0, 0.5);
+    arrow.setVisible(false);
+    arrow.setAlpha(0.8);
+
+    // 7. INTERFAZ (UI Minimalista)
+    const style = { font: 'bold 20px Arial', fill: '#ffffff', shadow: { offsetX: 2, offsetY: 2, color: '#000', blur: 4, stroke: true, fill: true } };
+    textScore = this.add.text(20, 40, 'PAR 3 | HOYO 1', style);
+
+    // 8. CONTROLES
     this.input.on('pointerdown', (pointer) => {
-        // Solo si la bola está casi quieta
-        if (ball.body.speed < 0.2) {
+        if (ball.body.speed < 0.5) {
             isAiming = true;
-            arrow.setVisible(true);
             arrow.setPosition(ball.x, ball.y);
+            arrow.setVisible(true);
         }
     });
 
@@ -77,18 +100,18 @@ function create() {
         if (isAiming) {
             const angle = Phaser.Math.Angle.Between(ball.x, ball.y, pointer.x, pointer.y);
             const dist = Phaser.Math.Distance.Between(ball.x, ball.y, pointer.x, pointer.y);
-            power = Phaser.Math.Clamp(dist, 0, 200); // Limitar fuerza máxima
+            power = Phaser.Math.Clamp(dist, 0, 300);
             
-            arrow.setRotation(angle + Math.PI); // Apuntar al lado contrario
-            arrow.setScale(power / 100, 1); // Estirar flecha según fuerza
+            arrow.setRotation(angle + Math.PI);
+            arrow.setScale(power / 100, 1 - (power/600)); // Se hace más fina al estirar
             
-            // Cambiar color flecha según fuerza (Verde -> Rojo)
-            const color = Phaser.Display.Color.Interpolate.ColorWithColor(
-                new Phaser.Display.Color(0, 255, 0),
-                new Phaser.Display.Color(255, 0, 0),
-                200, power
+            // Cambio de color sutil (Blanco a Rojo Intenso)
+            const tint = Phaser.Display.Color.Interpolate.ColorWithColor(
+                new Phaser.Display.Color(255, 255, 255),
+                new Phaser.Display.Color(255, 50, 50),
+                300, power
             );
-            arrow.setTint(Phaser.Display.Color.GetColor(color.r, color.g, color.b));
+            arrow.setTint(Phaser.Display.Color.GetColor(tint.r, tint.g, tint.b));
         }
     });
 
@@ -96,82 +119,108 @@ function create() {
         if (isAiming) {
             isAiming = false;
             arrow.setVisible(false);
-            
-            // CALCULAR EL TIRO
-            const angle = Phaser.Math.Angle.Between(ball.x, ball.y, pointer.x, pointer.y);
-            const velocityX = Math.cos(angle + Math.PI) * (power * 0.15); // Factor de potencia
-            const velocityY = Math.sin(angle + Math.PI) * (power * 0.15);
-            
-            ball.setVelocity(velocityX, velocityY);
+            const angle = arrow.rotation;
+            const force = power * 0.00035; // Calibración de fuerza
+            ball.applyForce({ x: Math.cos(angle) * force, y: Math.sin(angle) * force });
         }
     });
 
-    // Flecha de dirección (oculta al inicio)
-    arrow = this.add.sprite(0, 0, 'arrowTexture').setOrigin(0, 0.5).setVisible(false);
-
-    // 5. DETECCIÓN DE VICTORIA
+    // 9. LÓGICA DE JUEGO
     this.matter.world.on('collisionstart', (event) => {
         event.pairs.forEach((pair) => {
-            const bodyA = pair.bodyA;
-            const bodyB = pair.bodyB;
-            
-            // Si la bola toca el sensor del hoyo Y va despacio
-            if ((bodyA.label === 'hole' || bodyB.label === 'hole') && ball.body.speed < 2.5) {
-                physicsWinEffect(this);
+            if ((pair.bodyA.label === 'hole' || pair.bodyB.label === 'hole') && ball.body.speed < 3) {
+                winHole(this);
             }
         });
     });
 }
 
 function update() {
-    // Lógica por frame (si es necesaria)
+    // Activar partículas solo si se mueve rápido
+    if (ball.body.speed > 1) {
+        particles.emitting = true;
+    } else {
+        particles.emitting = false;
+    }
 }
 
-function physicsWinEffect(scene) {
-    // Efecto de "caer" en el hoyo
+function winHole(scene) {
+    scene.matter.pause(); // Pausar física
+    
+    // Animación de entrada al hoyo
     scene.tweens.add({
         targets: ball,
         scale: 0,
-        duration: 300,
+        alpha: 0,
+        duration: 400,
+        ease: 'Power2',
         onComplete: () => {
-            alert("¡Hoyo en uno! - Nivel Completado");
-            // Aquí reiniciamos la bola
-            ball.setPosition(config.width/2, config.height - 150);
-            ball.setScale(1);
-            ball.setVelocity(0,0);
+            scene.cameras.main.fade(500, 0, 0, 0, false, function(camera, progress) {
+                if (progress > 0.9) location.reload(); // Reiniciar por ahora
+            });
         }
     });
 }
 
-// --- FUNCIÓN MÁGICA PARA GRÁFICOS NO PLANOS ---
-function crearGraficosPremium(scene) {
-    const graphics = scene.make.graphics({ x: 0, y: 0, add: false });
+// --- GENERADOR DE ARTE DE ALTA GAMA (SIN IMÁGENES EXTERNAS) ---
+function crearArteDeLujo(scene) {
+    // 1. Textura del Suelo (Fieltro Verde Oscuro con Ruido)
+    const grass = scene.make.graphics({x:0, y:0, add:false});
+    grass.fillStyle(0x0a4020); // Verde Inglés Profundo
+    grass.fillRect(0,0,512,512);
+    // Añadir "ruido" (puntos) para textura
+    grass.fillStyle(0x0f552a);
+    for(let i=0; i<3000; i++) {
+        grass.fillCircle(Math.random()*512, Math.random()*512, 1);
+    }
+    grass.generateTexture('feltTexture', 512, 512);
 
-    // 1. Textura de Bola (Esfera con brillo especular)
-    graphics.fillStyle(0xffffff); // Base blanca
-    graphics.fillCircle(16, 16, 16);
-    graphics.generateTexture('ballTexture', 32, 32);
-    graphics.clear();
+    // 2. Textura de Bola (Gradiente Radial 3D)
+    const b = scene.make.graphics({x:0, y:0, add:false});
+    // Base oscura
+    b.fillStyle(0xaaaaaa); 
+    b.fillCircle(32,32,32);
+    // Brillo Especular (El secreto del 3D)
+    b.fillStyle(0xffffff);
+    b.setAlpha(0.9);
+    b.fillCircle(20, 20, 8); // Brillo principal
+    b.setAlpha(0.4);
+    b.fillCircle(25, 25, 15); // Brillo secundario
+    b.generateTexture('ballTexture', 64, 64);
+
+    // 3. Textura de Hoyo (Degradado hacia negro)
+    const h = scene.make.graphics({x:0, y:0, add:false});
+    h.fillStyle(0x000000);
+    h.fillCircle(32,32,24);
+    h.lineStyle(4, 0x333333, 0.5); // Borde
+    h.strokeCircle(32,32,24);
+    h.generateTexture('holeTexture', 64, 64);
+
+    // 4. Flecha de Guía (Triángulo estilizado)
+    const a = scene.make.graphics({x:0, y:0, add:false});
+    a.fillStyle(0xffffff);
+    a.fillTriangle(0, 10, 0, -10, 40, 0); // Punta
+    a.fillRect(-100, -2, 100, 4); // Cola
+    a.generateTexture('arrowTexture', 140, 20);
+
+    // 5. Viñeta (Sombra en esquinas - Estilo Cine)
+    const v = scene.make.graphics({x:0, y:0, add:false});
+    v.fillStyle(0x000000, 1);
+    v.fillCircle(256, 256, 300); // Círculo central transparente (hack inverso)
+    // Nota: Phaser graphics no hace gradientes radiales transparentes fácil, 
+    // usaremos una textura radial simple generada:
+    const canvas = scene.textures.createCanvas('vignette', 512, 512).getSourceImage();
+    const ctx = canvas.getContext('2d');
+    const grd = ctx.createRadialGradient(256,256,150, 256,256,512);
+    grd.addColorStop(0, "rgba(0,0,0,0)");
+    grd.addColorStop(1, "rgba(0,0,0,0.8)");
+    ctx.fillStyle = grd;
+    ctx.fillRect(0,0,512,512);
+    scene.textures.get('vignette').refresh();
     
-    // (Nota: Para un efecto 3D real, usaremos sprites después, pero esto crea la base redonda perfecta)
-
-    // 2. Textura del Hoyo (Sombra interior)
-    graphics.fillStyle(0x000000);
-    graphics.fillCircle(20, 20, 20);
-    graphics.fillStyle(0x1a1a1a);
-    graphics.fillCircle(20, 20, 18); // Borde oscuro
-    graphics.generateTexture('holeTexture', 40, 40);
-    graphics.clear();
-
-    // 3. Textura de Flecha
-    graphics.fillStyle(0xffffff);
-    graphics.fillRect(0, -5, 100, 10);
-    graphics.fillTriangle(100, -15, 100, 15, 130, 0);
-    graphics.generateTexture('arrowTexture', 140, 30);
-    graphics.clear();
-
-    // 4. Textura de Césped (Un simple color sólido por ahora con ruido visual si pudiéramos)
-    graphics.fillStyle(0x2d5a27); // Verde elegante oscuro
-    graphics.fillRect(0, 0, 64, 64);
-    graphics.generateTexture('grassTexture', 64, 64);
+    // 6. Partícula simple
+    const p = scene.make.graphics({x:0, y:0, add:false});
+    p.fillStyle(0xffffff, 1);
+    p.fillCircle(4,4,4);
+    p.generateTexture('particle', 8, 8);
 }
